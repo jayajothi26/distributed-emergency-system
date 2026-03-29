@@ -1,4 +1,5 @@
 import os
+import asyncio
 import psycopg2
 import redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -19,9 +20,6 @@ app.add_middleware(
 
 # -----------------------------
 # REDIS CONFIG
-# Works on:
-# - Render using REDIS_URL
-# - Local using localhost fallback
 # -----------------------------
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
@@ -32,9 +30,6 @@ r = redis.Redis.from_url(
 
 # -----------------------------
 # POSTGRES CONNECTION
-# Works on:
-# - Render using DATABASE_URL
-# - Local using localhost fallback
 # -----------------------------
 def get_db_conn():
     database_url = os.environ.get("DATABASE_URL")
@@ -50,7 +45,7 @@ def get_db_conn():
     )
 
 # -----------------------------
-# OPTIONAL: CREATE TABLE IF NOT EXISTS
+# CREATE TABLE IF NOT EXISTS
 # -----------------------------
 def init_db():
     conn = get_db_conn()
@@ -111,6 +106,28 @@ async def broadcast_update(data):
             clients.remove(client)
 
 # -----------------------------
+# SIMULATE STATUS CHANGES
+# -----------------------------
+async def simulate_status_updates(incident_id: int):
+    try:
+        await asyncio.sleep(10)
+        r.set(f"incident:{incident_id}:status", "dispatched")
+        await broadcast_update({
+            "id": incident_id,
+            "status": "dispatched"
+        })
+
+        await asyncio.sleep(10)
+        r.set(f"incident:{incident_id}:status", "resolved")
+        await broadcast_update({
+            "id": incident_id,
+            "status": "resolved"
+        })
+
+    except Exception as e:
+        print(f"Status simulation error for incident {incident_id}: {e}")
+
+# -----------------------------
 # ROOT ROUTE
 # -----------------------------
 @app.get("/")
@@ -141,13 +158,16 @@ async def report_emergency(incident_type: str, lat: float, lon: float, desc: str
         cur.close()
         conn.close()
 
-        # Initial status
+        # Set initial status
         r.set(f"incident:{incident_id}:status", "pending")
 
         await broadcast_update({
             "id": incident_id,
             "status": "pending"
         })
+
+        # Start automatic status simulation in background
+        asyncio.create_task(simulate_status_updates(incident_id))
 
         return {
             "status": "Emergency Reported",
