@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: emergency_response
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Jothi@2006
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  worker:
+    build: ./backend
+    command: python worker.py
+    depends_on:
+      - rabbitmq
+      - redis
+
+  frontend:
+    build: .
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend

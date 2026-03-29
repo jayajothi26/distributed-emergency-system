@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Response Command | v1.1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map { height: calc(100vh - 120px); width: 100%; border-radius: 15px; z-index: 1; }
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        body { background-color: #0f172a; color: white; overflow: hidden; font-family: 'Inter', sans-serif; }
+        .marker-resolved { filter: hue-rotate(140deg) brightness(0.8); }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
+</head>
+<body class="p-6">
+    <div class="flex gap-6 h-full">
+        <div class="w-1/4 glass p-6 rounded-2xl flex flex-col gap-4">
+            <div class="flex justify-between items-center border-b border-gray-700 pb-2">
+                <h2 class="text-xl font-bold flex items-center gap-2">
+                    <span class="relative flex h-3 w-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                    </span>
+                    Live Alerts
+                </h2>
+                <button onclick="clearResolved()" class="text-[10px] bg-gray-800 hover:bg-gray-700 px-2 py-1 rounded text-gray-400 transition">CLEAR RESOLVED</button>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-2 py-2">
+                <div class="bg-blue-900/20 p-2 rounded-lg border border-blue-500/30">
+                    <p class="text-[10px] text-blue-400 uppercase font-bold">Active</p>
+                    <p id="active-count" class="text-xl font-mono">0</p>
+                </div>
+                <div class="bg-green-900/20 p-2 rounded-lg border border-green-500/30">
+                    <p class="text-[10px] text-green-400 uppercase font-bold">Resolved</p>
+                    <p id="resolved-count" class="text-xl font-mono">0</p>
+                </div>
+            </div>
+
+            <div id="incident-list" class="flex flex-col gap-3 overflow-y-auto pr-2">
+                <p class="text-gray-400 italic text-sm text-center mt-10">Waiting for new reports...</p>
+            </div>
+        </div>
+
+        <div class="w-3/4 flex flex-col gap-4">
+            <header class="flex justify-between items-center glass px-6 py-3 rounded-2xl">
+                <div>
+                    <h1 class="text-xl font-bold text-blue-400 tracking-tighter">DISTRIBUTED DISPATCH v1.1</h1>
+                    <p class="text-xs text-gray-400 font-mono">STACK: FastAPI + RabbitMQ + Redis + Postgres</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs uppercase text-gray-500 tracking-widest">System Status</p>
+                    <p class="text-green-400 font-mono text-sm animate-pulse">● OPERATIONAL</p>
+                </div>
+            </header>
+            
+            <div id="map" class="shadow-2xl border border-gray-800"></div>
+            <p class="text-[10px] text-gray-500 text-center uppercase tracking-widest italic">Click anywhere on the map to simulate an emergency event</p>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // --- Configuration & State ---
+        let activeCount = 0;
+        let resolvedCount = 0;
+        const markers = {}; // Store markers by ID
+
+        const map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+        // --- Core Functions ---
+
+        map.on('click', function(e) {
+            const type = prompt("Emergency Type (Fire / Medical / Police):");
+            if (!type) return;
+            
+            // POST to your FastAPI backend
+            fetch(`http://127.0.0.1:8000/report_emergency?incident_type=${type}&lat=${e.latlng.lat}&lon=${e.latlng.lng}&desc=Citizen Report`, {
+                method: 'POST'
+            })
+            .then(res => res.ok ? res.json() : Promise.reject())
+            .then(data => {
+                addIncidentToUI(data.incident_id, type, e.latlng.lat, e.latlng.lng);
+            })
+            .catch(() => alert("Backend connection failed. Is FastAPI running?"));
+        });
+
+        function addIncidentToUI(id, type, lat, lng) {
+            // 1. Map Marker with custom "Ping" logic
+            const marker = L.marker([lat, lng]).addTo(map);
+            marker.bindPopup(`<div class="text-slate-900 font-sans"><b>INCIDENT #${id}</b><br>${type.toUpperCase()}</div>`);
+            markers[id] = marker;
+
+            // 2. Sidebar Card
+            const list = document.getElementById('incident-list');
+            if (list.querySelector('p.italic')) list.innerHTML = ''; 
+
+            const card = document.createElement('div');
+            card.id = `card-${id}`;
+            card.className = "glass p-4 rounded-xl border-l-4 border-yellow-500 animate-pulse transition-all duration-500";
+            card.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <span class="font-bold text-sm">#${id} ${type.toUpperCase()}</span>
+                    <span id="badge-${id}" class="text-[9px] bg-yellow-900/50 text-yellow-200 px-2 py-0.5 rounded border border-yellow-700">PENDING</span>
+                </div>
+                <p class="text-[10px] text-gray-400 mt-1 font-mono">COORD: ${lat.toFixed(3)}, ${lng.toFixed(3)}</p>
+            `;
+            list.prepend(card);
+
+            // 3. Stats Update
+            activeCount++;
+            updateStats();
+
+            pollStatus(id, marker, card);
+        }
+
+        function pollStatus(id, marker, card) {
+            const badge = document.getElementById(`badge-${id}`);
+            let timer = setInterval(() => {
+                fetch(`http://127.0.0.1:8000/check_status/${id}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === "dispatched" && badge.innerHTML !== "DISPATCHED") {
+                            badge.innerHTML = "DISPATCHED";
+                            badge.className = "text-[9px] bg-blue-900/50 text-blue-200 px-2 py-0.5 rounded border border-blue-700";
+                            card.className = "glass p-4 rounded-xl border-l-4 border-blue-500 transition-all duration-500";
+                        } 
+                        else if (data.status === "resolved") {
+                            badge.innerHTML = "RESOLVED";
+                            badge.className = "text-[9px] bg-green-900/50 text-green-200 px-2 py-0.5 rounded border border-green-700";
+                            card.className = "glass p-4 rounded-xl border-l-4 border-green-500 opacity-50 resolved-item";
+                            card.classList.remove('animate-pulse');
+                            
+                            // Visual change on map
+                            marker.getElement().classList.add('marker-resolved');
+                            
+                            // Update State
+                            activeCount--;
+                            resolvedCount++;
+                            updateStats();
+                            
+                            clearInterval(timer);
+                        }
+                    })
+                    .catch(() => clearInterval(timer));
+            }, 2000);
+        }
+
+        function updateStats() {
+            document.getElementById('active-count').innerText = activeCount;
+            document.getElementById('resolved-count').innerText = resolvedCount;
+        }
+
+        function clearResolved() {
+            const resolvedElements = document.querySelectorAll('.resolved-item');
+            resolvedElements.forEach(el => el.remove());
+            if (document.getElementById('incident-list').children.length === 0) {
+                document.getElementById('incident-list').innerHTML = '<p class="text-gray-400 italic text-sm text-center mt-10">Waiting for new reports...</p>';
+            }
+        }
+    </script>
+</body>
+</html>
