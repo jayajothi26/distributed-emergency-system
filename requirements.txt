@@ -2,3 +2,8 @@ streamlit
 requests
 folium
 streamlit-folium
+fastapi
+uvicorn
+psycopg2-binary
+redis
+pika

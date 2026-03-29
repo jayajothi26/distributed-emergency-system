@@ -9,9 +9,6 @@ BASE_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(layout="wide")
 
-# ------------------------
-# DARK THEME
-# ------------------------
 st.markdown("""
 <style>
 body { background-color: #0f172a; color: white; }
@@ -35,68 +32,51 @@ iframe {
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------
-# SESSION STATE
-# ------------------------
 if "incidents" not in st.session_state:
     st.session_state.incidents = {}
 
 if "alerts" not in st.session_state:
     st.session_state.alerts = []
 
-# ------------------------
-# 🔥 FETCH ALL INCIDENTS (MULTI-USER FIX)
-# ------------------------
 try:
-    res = requests.get(f"{BASE_URL}/all_incidents")
+    res = requests.get(f"{BASE_URL}/all_incidents", timeout=5)
     all_data = res.json()
 
-    for item in all_data:
-        id = item["id"]
+    if isinstance(all_data, list):
+        for item in all_data:
+            incident_id = item["id"]
 
-        if id not in st.session_state.incidents:
-            st.session_state.incidents[id] = {
-                "type": item["type"],
-                "lat": item["lat"],
-                "lon": item["lon"],
-                "status": "pending"
-            }
-
-except:
+            if incident_id not in st.session_state.incidents:
+                st.session_state.incidents[incident_id] = {
+                    "type": item["type"],
+                    "lat": item["lat"],
+                    "lon": item["lon"],
+                    "status": "pending"
+                }
+except Exception:
     st.error("⚠ Failed to fetch incidents from server")
 
-# ------------------------
-# 🔥 FETCH STATUS
-# ------------------------
-for id in list(st.session_state.incidents.keys()):
+for incident_id in list(st.session_state.incidents.keys()):
     try:
-        res = requests.get(f"{BASE_URL}/check_status/{id}")
+        res = requests.get(f"{BASE_URL}/check_status/{incident_id}", timeout=5)
         status = res.json().get("status", "pending")
 
-        old_status = st.session_state.incidents[id]["status"]
+        old_status = st.session_state.incidents[incident_id]["status"]
 
         if old_status != status:
-            st.session_state.alerts.append(f"{id} → {status}")
+            st.session_state.alerts.append(f"{incident_id} → {status}")
 
-        st.session_state.incidents[id]["status"] = status
-
-    except:
+        st.session_state.incidents[incident_id]["status"] = status
+    except Exception:
         pass
 
-# ------------------------
-# HEADER
-# ------------------------
 st.title("🚨 DISTRIBUTED DISPATCH SYSTEM")
 st.caption("FastAPI + RabbitMQ + Redis + Postgres")
 
-# ------------------------
-# MAP
-# ------------------------
 m = folium.Map(location=[12.9716, 77.5946], zoom_start=13)
 cluster = MarkerCluster().add_to(m)
 
-for id, data in st.session_state.incidents.items():
-
+for incident_id, data in st.session_state.incidents.items():
     color = "red"
     if data["status"] == "dispatched":
         color = "blue"
@@ -105,15 +85,12 @@ for id, data in st.session_state.incidents.items():
 
     folium.Marker(
         [data["lat"], data["lon"]],
-        popup=f"{id} - {data['type']} ({data['status']})",
+        popup=f"{incident_id} - {data['type']} ({data['status']})",
         icon=folium.Icon(color=color)
     ).add_to(cluster)
 
 map_data = st_folium(m, height=500, use_container_width=True)
 
-# ------------------------
-# CLICK EVENT
-# ------------------------
 if map_data and map_data.get("last_clicked"):
     lat = map_data["last_clicked"]["lat"]
     lon = map_data["last_clicked"]["lng"]
@@ -126,31 +103,33 @@ if map_data and map_data.get("last_clicked"):
     )
 
     if st.button("🚨 Send Emergency"):
+        try:
+            res = requests.post(
+                f"{BASE_URL}/report_emergency",
+                params={
+                    "incident_type": incident_type,
+                    "lat": lat,
+                    "lon": lon,
+                    "desc": "Streamlit Alert"
+                },
+                timeout=5
+            )
 
-        res = requests.post(
-            f"{BASE_URL}/report_emergency",
-            params={
-                "incident_type": incident_type,
-                "lat": lat,
-                "lon": lon,
-                "desc": "Streamlit Alert"
-            }
-        )
+            data = res.json()
 
-        data = res.json()
+            if "incident_id" in data:
+                st.session_state.incidents[data["incident_id"]] = {
+                    "type": incident_type,
+                    "lat": lat,
+                    "lon": lon,
+                    "status": "pending"
+                }
+                st.success(f"Incident Created: {data['incident_id']}")
+            else:
+                st.error(f"Failed to create incident: {data}")
+        except Exception as e:
+            st.error(f"Backend request failed: {e}")
 
-        st.session_state.incidents[data["incident_id"]] = {
-            "type": incident_type,
-            "lat": lat,
-            "lon": lon,
-            "status": "pending"
-        }
-
-        st.success(f"Incident Created: {data['incident_id']}")
-
-# ------------------------
-# SIDEBAR
-# ------------------------
 st.sidebar.title("📡 Live Alerts")
 
 active = sum(1 for i in st.session_state.incidents.values() if i["status"] != "resolved")
@@ -167,22 +146,15 @@ for alert in st.session_state.alerts[-5:]:
         unsafe_allow_html=True
     )
 
-# ------------------------
-# INCIDENT LOG
-# ------------------------
 st.subheader("📋 Incident Log")
 
-for id, data in st.session_state.incidents.items():
-
+for incident_id, data in st.session_state.incidents.items():
     if data["status"] == "pending":
-        st.warning(f"{id} - {data['type']} (Pending)")
+        st.warning(f"{incident_id} - {data['type']} (Pending)")
     elif data["status"] == "dispatched":
-        st.info(f"{id} - {data['type']} (Dispatched)")
+        st.info(f"{incident_id} - {data['type']} (Dispatched)")
     elif data["status"] == "resolved":
-        st.success(f"{id} - {data['type']} (Resolved)")
+        st.success(f"{incident_id} - {data['type']} (Resolved)")
 
-# ------------------------
-# AUTO REFRESH
-# ------------------------
 time.sleep(2)
 st.rerun()
