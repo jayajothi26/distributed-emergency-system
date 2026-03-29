@@ -5,8 +5,7 @@ from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 import time
 
-BASE_URL = "http://127.0.0.1:8000"
-
+BASE_URL = "https://distributed-emergency-system-2.onrender.com"
 st.set_page_config(layout="wide")
 
 st.markdown("""
